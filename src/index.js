@@ -46,14 +46,17 @@ export default {
       });
     }
     
-    // 提取路径参数：/bot<token>/<method>
-    const pathMatch = url.pathname.match(/^\/bot([^\/]+)\/(.+)$/);
+    // 提取路径参数：支持 /bot<token>/<method> 和 /bot/<token>/<method>
+    let pathMatch = url.pathname.match(/^\/bot\/?([^\/]+)\/(.+)$/);
     
     if (!pathMatch) {
       return new Response(JSON.stringify({
         error: 'Invalid URL format',
-        usage: '/bot<TOKEN>/<METHOD>',
-        example: '/bot123456:ABC-DEF/sendMessage',
+        usage: '/bot<TOKEN>/<METHOD> or /bot/<TOKEN>/<METHOD>',
+        examples: [
+          '/bot123456:ABC-DEF/sendMessage',
+          '/bot/123456:ABC-DEF/sendMessage'
+        ],
         your_path: url.pathname
       }), {
         status: 400,
