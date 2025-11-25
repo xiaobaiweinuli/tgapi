@@ -1,0 +1,10 @@
+{
+  "name": "tg-proxy-cf",
+  "version": "1.0.0",
+  "description": "Telegram Bot API Proxy on Cloudflare Workers",
+  "main": "src/index.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  }
+}
