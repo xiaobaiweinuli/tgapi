@@ -1,3 +1,7 @@
 name = "tgbotapi"
 main = "src/index.js"
-compatibility_date = "2024-01-01"
+compatibility_date = "2025-11-26"
+
+[[kv_namespaces]]
+binding = "FILE_STORE"
+id = "be8c76a2cc4943cd853087d2dbf343ea"
