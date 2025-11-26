@@ -1,23 +1,67 @@
-支持三种链接格式：
-1. **ID链接**：`/file/279-shortx.json`
-1. **短链接**：`/file/shortx.json`（文件名作为路径）
-2. **加密链接**：`/file/xYz9Kp2mN4...`（完全加密，作为备用）
+# Telegram 代理服务
 
-需要使用 Cloudflare Workers KV 来存储文件名到加密数据的映射。
+基于 Cloudflare Workers 的 Telegram Bot API 代理服务，支持文件上传和永久直链生成，适合做博客图床和文件分享。
 
-## 配置 Cloudflare Workers KV
+## ✨ 主要特性
 
-### 1. 创建 KV 命名空间
+- 🔐 **上传密码保护** - 只有授权用户可以上传文件
+- 🌍 **下载完全公开** - 生成的链接无需密码，可以直接分享
+- 🔗 **友好的链接格式** - 基于频道和消息ID，简洁易读
+  - 公开频道：`/file/@channelname/123`
+  - 私有频道：`/file/1826585339/123`
+- 🔒 **Token 加密保护** - 下载链接中不包含明文 Bot Token
+- ♾️ **永久有效** - 链接永不过期
+- 📱 **Telegram 原消息跳转** - 可以直接跳转到 Telegram 查看原文件
+- 🚀 **CDN 加速** - 利用 Cloudflare 全球边缘节点
+- 📦 **大文件支持** - 最大支持 100MB（Cloudflare 免费版）
+
+## 🎯 使用场景
+
+- ✅ 博客图床
+- ✅ 文档分享
+- ✅ 视频托管
+- ✅ 音频文件
+- ✅ 任何需要永久直链的文件
+
+## 📋 前置要求
+
+- Cloudflare 账号
+- Telegram Bot Token（通过 [@BotFather](https://t.me/BotFather) 创建）
+- Telegram 频道或群组（用于存储文件）
+
+## 🚀 快速部署
+
+### 1. 克隆项目
 
 ```bash
-# 创建 KV 命名空间
-wrangler kv:namespace create "FILE_STORE"
-
-# 会输出类似：
-# { binding = "FILE_STORE", id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }
+git clone https://github.com/你的用户名/tgapi.git
+cd tgapi
 ```
 
-### 2. 更新 `wrangler.toml`
+### 2. 安装 Wrangler CLI
+
+```bash
+npm install -g wrangler
+```
+
+### 3. 登录 Cloudflare
+
+```bash
+wrangler login
+```
+
+### 4. 创建 KV 命名空间
+
+```bash
+wrangler kv:namespace create "FILE_STORE"
+```
+
+记录输出的 KV ID，例如：
+```
+{ binding = "FILE_STORE", id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }
+```
+
+### 5. 配置 `wrangler.toml`
 
 ```toml
 name = "tgapi"
@@ -27,156 +71,179 @@ compatibility_date = "2024-11-25"
 # KV 命名空间绑定
 [[kv_namespaces]]
 binding = "FILE_STORE"
-id = "你的KV命名空间ID"  # 从上面的命令输出中获取
-
-# 生产环境配置（可选）
-# [[env.production.kv_namespaces]]
-# binding = "FILE_STORE"
-# id = "生产环境的KV_ID"
+id = "你的KV命名空间ID"  # 替换为步骤4中获取的ID
 ```
 
-### 3. 设置密钥
+### 6. 设置密钥
 
 ```bash
-# 设置访问密码
+# 设置上传密码
 wrangler secret put ACCESS_PASSWORD
-# 输入：mySecurePassword123
+# 输入你的密码，例如：mySecurePassword123
 
-# 设置加密密钥
+# 设置加密密钥（32位随机字符串）
 wrangler secret put ENCRYPTION_KEY
-# 输入：abcdef1234567890abcdef1234567890
+# 输入32位密钥，例如：abcdef1234567890abcdef1234567890
 ```
-### 4. 设置密钥（仅用于上传）
-wrangler secret put ACCESS_PASSWORD
-wrangler secret put ENCRYPTION_KEY
 
-### 5. 部署
+### 7. 部署
 
 ```bash
 wrangler deploy
 ```
 
-## 使用示例
+部署成功后会得到一个 URL，例如：
+```
+https://tgapi.your-subdomain.workers.dev
+```
 
+## 📖 使用指南
 
-### ✅ 上传：需要密码
+### 上传文件（需要密码）
+
+#### 上传图片
+
 ```bash
-# 上传需要密码验证
-curl -X POST 'https://tgbotapi.gongzhonghao.dpdns.org/bot<TOKEN>/sendDocument' \
-  -H 'X-Access-Password: myPassword123' \
-  -F 'chat_id=-1001826585339' \
-  -F 'document=@shortx.json'
+curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/sendPhoto' \
+  -H 'X-Access-Password: 你的密码' \
+  -F 'chat_id=<你的频道ID>' \
+  -F 'photo=@/path/to/image.jpg'
 ```
 
-### ✅ 下载：无需密码
+#### 上传文档
+
 ```bash
-# 直接访问，无需密码
-curl 'https://tgbotapi.gongzhonghao.dpdns.org/file/279-shortx.json'
-
-# 浏览器直接打开
-https://tgbotapi.gongzhonghao.dpdns.org/file/279-shortx.json
+curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/sendDocument' \
+  -H 'X-Access-Password: 你的密码' \
+  -F 'chat_id=<你的频道ID>' \
+  -F 'document=@/path/to/file.pdf'
 ```
 
-## 博客中使用（安全）
+#### 上传视频
 
-### Markdown 格式
-```markdown
-![配置文件](https://tgbotapi.gongzhonghao.dpdns.org/file/279-shortx.json)
-
-![截图](https://tgbotapi.gongzhonghao.dpdns.org/file/280-screenshot.png)
-
-![头像](https://tgbotapi.gongzhonghao.dpdns.org/file/281-avatar.jpg)
+```bash
+curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/sendVideo' \
+  -H 'X-Access-Password: 你的密码' \
+  -F 'chat_id=<你的频道ID>' \
+  -F 'video=@/path/to/video.mp4'
 ```
 
-**✅ 密码不会泄露！**
-
-### HTML 格式
-```html
-<img src="https://tgbotapi.gongzhonghao.dpdns.org/file/279-image.jpg" alt="示例图片" />
-
-<a href="https://tgbotapi.gongzhonghao.dpdns.org/file/280-document.pdf">下载文档</a>
-
-<video src="https://tgbotapi.gongzhonghao.dpdns.org/file/281-video.mp4" controls></video>
-```
-
-## 安全性说明
-
-### 上传端保护
-- ✅ 只有知道密码的人才能上传
-- ✅ 防止恶意上传和滥用
-- ✅ 密码存储在环境变量中
-
-### 下载端开放
-- ✅ 链接可以公开分享
-- ✅ 适合博客、网站、论坛等
-- ✅ Token 已加密，不会泄露
-- ✅ 即使别人知道链接，也无法上传文件
-
-## 响应示例
+### 响应示例
 
 ```json
 {
   "ok": true,
   "result": {
     "message_id": 279,
-    "document": {
-      "file_name": "shortx.json",
-      "file_size": 8590
-    }
+    "chat": {
+      "id": -1001826585339,
+      "username": "myblog",
+      "title": "我的博客图床"
+    },
+    "photo": [...]
   },
   "cdn": {
-    "url": "https://tgbotapi.gongzhonghao.dpdns.org/file/279-shortx.json",
-    "url_by_name": "https://tgbotapi.gongzhonghao.dpdns.org/file/shortx.json",
-    "url_encrypted": "https://tgbotapi.gongzhonghao.dpdns.org/file/xYz9Kp2mN4...",
-    "filename": "shortx.json",
+    "url": "https://tgapi.your-subdomain.workers.dev/file/@myblog/279",
+    "url_encrypted": "https://tgapi.your-subdomain.workers.dev/file/xYz9Kp2mN4...",
+    "filename": "photo.jpg",
     "message_id": 279,
-    "size": 8590,
+    "chat_id": -1001826585339,
+    "channel_identifier": "@myblog",
+    "size": 125678,
     "permanent": true,
-    "telegram_link": "https://t.me/c/1826585339/279",
-    "markdown": "![shortx.json](https://tgbotapi.gongzhonghao.dpdns.org/file/279-shortx.json)",
-    "html": "<img src=\"https://tgbotapi.gongzhonghao.dpdns.org/file/279-shortx.json\" alt=\"shortx.json\" />",
-    "note": "链接永久有效，无需密码即可下载，基于消息ID，可直接跳转到 Telegram 查看原消息"
+    "telegram_link": "https://t.me/myblog/279",
+    "markdown": "![photo.jpg](https://tgapi.your-subdomain.workers.dev/file/@myblog/279)",
+    "html": "<img src=\"https://tgapi.your-subdomain.workers.dev/file/@myblog/279\" alt=\"photo.jpg\" />",
+    "note": "链接永久有效，无需密码即可下载，可直接跳转到 Telegram 查看原消息"
   }
 }
 ```
 
-**注意：Markdown 和 HTML 引用中都不需要密码参数！**
+### 下载文件（无需密码）
 
-## 完整上传脚本
+#### 公开频道
+
+```
+https://tgapi.your-subdomain.workers.dev/file/@myblog/279
+```
+
+#### 私有频道
+
+```
+https://tgapi.your-subdomain.workers.dev/file/1826585339/279
+```
+
+#### 加密链接（备用）
+
+```
+https://tgapi.your-subdomain.workers.dev/file/xYz9Kp2mN4qR8sT6...
+```
+
+### 在博客中使用
+
+#### Markdown
+
+```markdown
+![我的图片](https://tgapi.your-subdomain.workers.dev/file/@myblog/279)
+
+![头像](https://tgapi.your-subdomain.workers.dev/file/1826585339/280)
+```
+
+#### HTML
+
+```html
+<img src="https://tgapi.your-subdomain.workers.dev/file/@myblog/279" alt="示例图片" />
+
+<a href="https://tgapi.your-subdomain.workers.dev/file/1826585339/280">下载文档</a>
+
+<video src="https://tgapi.your-subdomain.workers.dev/file/@myblog/281" controls></video>
+```
+
+## 🛠️ 上传脚本
+
+创建 `upload.sh` 文件：
 
 ```bash
 #!/bin/bash
 
-PASSWORD="myPassword123"
-BOT_TOKEN="7722553870:AAE5-y2t0DwIhzIlN-aIKEmiJ5vWQhWp3-o"
-CHAT_ID="-1001826585339"
-PROXY_URL="https://tgbotapi.gongzhonghao.dpdns.org"
+# ===== 配置 =====
+PASSWORD="你的密码"
+BOT_TOKEN="你的BOT_TOKEN"
+CHAT_ID="你的频道ID"
+PROXY_URL="https://tgapi.your-subdomain.workers.dev"
 
+# ===== 脚本 =====
 if [ $# -eq 0 ]; then
   echo "用法: $0 <文件路径>"
+  echo "示例: $0 /path/to/image.jpg"
   exit 1
 fi
 
 FILE="$1"
-FILENAME=$(basename "$FILE")
+if [ ! -f "$FILE" ]; then
+  echo "错误：文件不存在"
+  exit 1
+fi
 
-echo "正在上传: $FILENAME"
+FILENAME=$(basename "$FILE")
+EXT="${FILENAME##*.}"
 
 # 判断文件类型
-EXT="${FILENAME##*.}"
 case "$EXT" in
   jpg|jpeg|png|gif|bmp|webp) METHOD="sendPhoto"; FIELD="photo" ;;
-  mp4|avi|mov|mkv) METHOD="sendVideo"; FIELD="video" ;;
-  mp3|wav|ogg|flac) METHOD="sendAudio"; FIELD="audio" ;;
+  mp4|avi|mov|mkv|webm) METHOD="sendVideo"; FIELD="video" ;;
+  mp3|wav|ogg|flac|m4a) METHOD="sendAudio"; FIELD="audio" ;;
   *) METHOD="sendDocument"; FIELD="document" ;;
 esac
+
+echo "正在上传: $FILENAME ($METHOD)"
 
 RESPONSE=$(curl -s -X POST "${PROXY_URL}/bot${BOT_TOKEN}/${METHOD}" \
   -H "X-Access-Password: ${PASSWORD}" \
   -F "chat_id=${CHAT_ID}" \
   -F "${FIELD}=@${FILE}")
 
-if echo "$RESPONSE" | jq -e '.ok' > /dev/null; then
+if echo "$RESPONSE" | jq -e '.ok' > /dev/null 2>&1; then
   URL=$(echo "$RESPONSE" | jq -r '.cdn.url')
   TELEGRAM_LINK=$(echo "$RESPONSE" | jq -r '.cdn.telegram_link')
   MARKDOWN=$(echo "$RESPONSE" | jq -r '.cdn.markdown')
@@ -186,20 +253,146 @@ if echo "$RESPONSE" | jq -e '.ok' > /dev/null; then
   echo "=== 下载链接（无需密码）==="
   echo "$URL"
   echo ""
-  echo "=== Telegram 消息链接 ==="
+  echo "=== Telegram 原消息 ==="
   echo "$TELEGRAM_LINK"
   echo ""
   echo "=== Markdown 引用 ==="
   echo "$MARKDOWN"
   
-  # 复制到剪贴板
+  # 尝试复制到剪贴板
   if command -v pbcopy > /dev/null 2>&1; then
     echo "$URL" | pbcopy
     echo ""
-    echo "✓ 链接已复制到剪贴板"
+    echo "✓ 链接已复制到剪贴板（macOS）"
+  elif command -v xclip > /dev/null 2>&1; then
+    echo "$URL" | xclip -selection clipboard
+    echo ""
+    echo "✓ 链接已复制到剪贴板（Linux）"
+  elif command -v clip.exe > /dev/null 2>&1; then
+    echo "$URL" | clip.exe
+    echo ""
+    echo "✓ 链接已复制到剪贴板（Windows/WSL）"
   fi
 else
   echo "✗ 上传失败"
   echo "$RESPONSE" | jq '.'
+  exit 1
 fi
 ```
+
+使用方法：
+
+```bash
+chmod +x upload.sh
+
+# 上传图片
+./upload.sh /path/to/image.jpg
+
+# 上传文档
+./upload.sh /path/to/document.pdf
+```
+
+## 🔧 高级配置
+
+### 自定义域名
+
+1. 在 Cloudflare Dashboard 中添加自定义域名
+2. 更新 `wrangler.toml`：
+
+```toml
+routes = [
+  { pattern = "img.yourdomain.com/*", zone_name = "yourdomain.com" }
+]
+```
+
+### 环境变量
+
+可以在 `wrangler.toml` 中设置公开的环境变量：
+
+```toml
+[vars]
+# 这里可以放一些非敏感配置
+```
+
+**注意**：密码和加密密钥必须使用 `wrangler secret put` 设置，不要写在配置文件中。
+
+## 📊 限制说明
+
+### Cloudflare Workers 免费版
+
+- 请求：100,000 次/天
+- CPU 时间：10ms/请求
+- 请求体大小：100MB
+
+### Cloudflare KV 免费版
+
+- 读取：100,000 次/天
+- 写入：1,000 次/天
+- 存储：1GB
+
+### Telegram Bot API
+
+- 文件大小：50MB（通过 Bot API）
+- 文件大小：2GB（通过客户端上传）
+
+## 🔒 安全说明
+
+### 上传安全
+
+- ✅ 密码存储在 Cloudflare Workers 环境变量中
+- ✅ 密码通过 HTTPS 传输
+- ✅ 只有知道密码的人才能上传
+
+### 下载安全
+
+- ✅ Bot Token 经过 AES-256-GCM 加密
+- ✅ 下载链接不包含明文 Token
+- ✅ 链接可以公开分享，不会泄露密码
+
+### 建议
+
+1. 使用强密码（至少 16 位，包含大小写字母、数字、符号）
+2. 定期更换密码
+3. 不要将上传密码泄露给他人
+4. 使用自定义域名（更专业）
+
+## ❓ 常见问题
+
+### Q: 如何获取频道 ID？
+
+A: 
+1. 方法 1：转发频道消息到 [@userinfobot](https://t.me/userinfobot)
+2. 方法 2：使用 Bot API 的 `getUpdates` 方法
+3. 公开频道可以直接使用 `@频道用户名`
+
+### Q: 私有频道的 ID 格式是什么？
+
+A: 
+- 完整 ID：`-1001826585339`（用于 API 调用）
+- 链接中的 ID：`1826585339`（去掉 `-100` 前缀）
+
+### Q: 上传失败怎么办？
+
+A: 检查以下几点：
+1. Bot Token 是否正确
+2. Bot 是否已加入频道并有发送消息权限
+3. 密码是否正确
+4. 文件大小是否超过 50MB
+
+### Q: 下载链接为什么是 404？
+
+A: 
+1. 检查 KV 是否正确配置
+2. 确认文件已成功上传
+3. 等待几秒钟（KV 同步需要时间）
+
+### Q: 如何删除已上传的文件？
+
+A: 
+1. 在 Telegram 频道中删除该消息
+2. 下载链接会失效（因为 Telegram 文件被删除）
+3. 如需清理 KV 存储，可以在 Cloudflare Dashboard 中手动删除
+
+---
+
+**⭐ 如果这个项目对你有帮助，请给一个 Star！**
