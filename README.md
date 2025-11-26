@@ -127,7 +127,31 @@ curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/send
   -F 'chat_id=<你的频道ID>' \
   -F 'video=@/path/to/video.mp4'
 ```
+## 超级群组指定话题
+```
+# 发送文档到指定话题
+curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/sendDocument' \
+  -H 'X-Access-Password: 你的密码' \
+  -F 'chat_id=<你的群组ID>' \
+  -F 'message_thread_id=话题ID' \
+  -F 'document=@"shortcuts.json"'
 
+# 发送消息到指定话题
+curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/sendMessage' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "chat_id": <你的群组ID>,
+    "message_thread_id": 话题ID,
+    "text": "这是发送到指定话题的消息"
+  }'
+
+# 发送图片到指定话题
+curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/sendPhoto' \
+  -H 'X-Access-Password: 你的密码' \
+  -F 'chat_id=<你的群组ID>' \
+  -F 'message_thread_id=话题ID' \
+   -F 'photo=@/path/to/image.jpg'
+```
 ### 响应示例
 
 ```json
