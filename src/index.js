@@ -50,11 +50,12 @@ export default {
             methods: ['sendDocument', 'sendPhoto', 'sendVideo', 'sendAudio']
           },
           download: {
-            by_message_id: '/file/<消息ID>-<文件名>',
-            by_filename: '/file/<文件名>',
+            public_channel: '/file/@频道用户名/消息ID',
+            private_channel: '/file/频道ID/消息ID',
             encrypted: '/file/<加密字符串>',
-            example: '/file/279-shortx.json',
-            note: '基于消息ID的链接，永久有效且可追溯到 Telegram 原消息'
+            example_public: '/file/@myblog/279',
+            example_private: '/file/1826585339/279',
+            note: '支持公开频道和私有频道，永久有效'
           }
         },
         features: [
@@ -82,14 +83,19 @@ export default {
     }
 
     // ===== 处理文件下载（不需要密码）=====
-    // 路径格式：/file/<消息ID>-<文件名> 或 /file/<文件名> 或 /file/<加密数据>
+    // 路径格式：/file/@username/123 或 /file/1826585339/123 或 /file/<加密数据>
     if (url.pathname.startsWith('/file/')) {
-      const fileIdentifier = url.pathname.substring(6); // 去掉 '/file/'
+      const pathParts = url.pathname.substring(6).split('/'); // 去掉 '/file/'
       
-      if (!fileIdentifier) {
+      if (pathParts.length === 0 || !pathParts[0]) {
         return new Response(JSON.stringify({
           error: '缺少文件标识',
-          message: '请提供文件名或加密链接'
+          message: '请提供正确的文件路径',
+          examples: [
+            '/file/@channelname/123',
+            '/file/1826585339/123',
+            '/file/<encrypted>'
+          ]
         }), {
           status: 400,
           headers: { 'Content-Type': 'application/json; charset=utf-8' }
@@ -97,18 +103,35 @@ export default {
       }
       
       let fileData = null;
+      let fileKey = null;
       
-      // 判断是什么类型的标识
-      // 1. 消息ID格式：279-shortx.json
-      // 2. 纯文件名：shortx.json
-      // 3. 加密数据：长字符串无扩展名
+      // 判断路径格式
+      if (pathParts.length === 2) {
+        // 格式：@username/123 或 1826585339/123
+        const chatIdentifier = pathParts[0];
+        const messageId = pathParts[1];
+        fileKey = `${chatIdentifier}/${messageId}`;
+      } else if (pathParts.length === 1) {
+        // 格式：加密字符串
+        fileKey = pathParts[0];
+      } else {
+        return new Response(JSON.stringify({
+          error: '路径格式错误',
+          message: '不支持的路径格式',
+          examples: [
+            '/file/@channelname/123',
+            '/file/1826585339/123'
+          ]
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
       
-      const hasExtension = /\.[a-zA-Z0-9]+$/.test(fileIdentifier);
-      
-      if (hasExtension && FILE_STORE) {
-        // 尝试从 KV 存储获取加密数据
+      // 尝试从 KV 获取
+      if (FILE_STORE) {
         try {
-          const encryptedData = await FILE_STORE.get(fileIdentifier);
+          const encryptedData = await FILE_STORE.get(fileKey);
           if (encryptedData) {
             const decrypted = await decryptData(encryptedData, ENCRYPTION_KEY);
             fileData = JSON.parse(decrypted);
@@ -119,20 +142,31 @@ export default {
       }
       
       // 如果 KV 查找失败，尝试直接解密（可能是加密链接）
-      if (!fileData) {
+      if (!fileData && pathParts.length === 1) {
         try {
-          const decrypted = await decryptData(fileIdentifier, ENCRYPTION_KEY);
+          const decrypted = await decryptData(fileKey, ENCRYPTION_KEY);
           fileData = JSON.parse(decrypted);
         } catch (error) {
           return new Response(JSON.stringify({
             error: '文件不存在',
             message: '找不到该文件，可能已被删除或链接无效',
-            identifier: fileIdentifier
+            path: url.pathname
           }), {
             status: 404,
             headers: { 'Content-Type': 'application/json; charset=utf-8' }
           });
         }
+      }
+      
+      if (!fileData) {
+        return new Response(JSON.stringify({
+          error: '文件不存在',
+          message: '找不到该文件',
+          path: url.pathname
+        }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
       }
       
       // 构造 Telegram 下载 URL
@@ -328,50 +362,57 @@ export default {
               // 加密文件信息
               const encrypted = await encryptData(JSON.stringify(fileInfo), ENCRYPTION_KEY);
               
-              // 生成基于消息ID的友好文件名
-              const friendlyFilename = `${messageId}-${filename}`;
-              const friendlyUrl = `${url.origin}/file/${friendlyFilename}`;
+              // 判断是公开频道还是私有频道/群组
+              let channelIdentifier = null;
+              let telegramMessageLink = null;
+              let friendlyUrl = null;
+              
+              // 检查是否有 username（公开频道）
+              const channelUsername = result.chat?.username || result.sender_chat?.username;
+              
+              if (channelUsername) {
+                // 公开频道：使用 @username
+                channelIdentifier = `@${channelUsername}`;
+                telegramMessageLink = `https://t.me/${channelUsername}/${messageId}`;
+                friendlyUrl = `${url.origin}/file/@${channelUsername}/${messageId}`;
+              } else if (chatId) {
+                // 私有频道/群组：使用数字ID（去掉 -100 前缀）
+                const cleanChatId = chatId.toString().replace(/^-100/, '');
+                channelIdentifier = cleanChatId;
+                telegramMessageLink = `https://t.me/c/${cleanChatId}/${messageId}`;
+                friendlyUrl = `${url.origin}/file/${cleanChatId}/${messageId}`;
+              }
+              
               const encryptedUrl = `${url.origin}/file/${encrypted}`;
               
-              // 如果有 KV 存储，保存两种映射
-              if (FILE_STORE) {
+              // 如果有 KV 存储，保存映射
+              if (FILE_STORE && channelIdentifier) {
                 try {
-                  // 保存 消息ID-文件名 映射
-                  await FILE_STORE.put(friendlyFilename, encrypted, {
+                  const fileKey = `${channelIdentifier}/${messageId}`;
+                  await FILE_STORE.put(fileKey, encrypted, {
                     expirationTtl: 86400 * 365 * 10 // 10 年
-                  });
-                  // 保存 纯文件名 映射（可选，方便直接用文件名访问）
-                  await FILE_STORE.put(filename, encrypted, {
-                    expirationTtl: 86400 * 365 * 10
                   });
                 } catch (error) {
                   console.error('保存到 KV 失败:', error);
                 }
               }
               
-              // 构造 Telegram 消息链接
-              let telegramMessageLink = null;
-              if (chatId) {
-                // 处理频道ID（去掉 -100 前缀）
-                const cleanChatId = chatId.toString().replace(/^-100/, '');
-                telegramMessageLink = `https://t.me/c/${cleanChatId}/${messageId}`;
-              }
-              
               // 构造响应
               responseData.cdn = {
-                url: friendlyUrl,
-                url_by_name: `${url.origin}/file/${filename}`,
+                url: friendlyUrl || encryptedUrl,
                 url_encrypted: encryptedUrl,
                 filename: filename,
                 message_id: messageId,
+                chat_id: chatId,
+                channel_identifier: channelIdentifier,
                 size: fileDataResponse.result.file_size,
                 permanent: true,
                 telegram_link: telegramMessageLink,
-                markdown: `![${filename}](${friendlyUrl})`,
-                html: `<img src="${friendlyUrl}" alt="${filename}" />`,
-                note: FILE_STORE 
-                  ? '链接永久有效，无需密码即可下载，基于消息ID，可直接跳转到 Telegram 查看原消息'
-                  : '仅加密链接可用（需要配置 KV 存储才能使用友好链接）'
+                markdown: `![${filename}](${friendlyUrl || encryptedUrl})`,
+                html: `<img src="${friendlyUrl || encryptedUrl}" alt="${filename}" />`,
+                note: FILE_STORE && friendlyUrl
+                  ? '链接永久有效，无需密码即可下载，可直接跳转到 Telegram 查看原消息'
+                  : '加密链接永久有效（需要配置 KV 存储才能使用友好链接）'
               };
               
               // 添加原始 Telegram 信息
@@ -380,7 +421,8 @@ export default {
                 file_unique_id: fileDataResponse.result.file_unique_id,
                 file_size: fileDataResponse.result.file_size,
                 message_id: messageId,
-                chat_id: chatId
+                chat_id: chatId,
+                channel_username: channelUsername || null
               };
             }
           } catch (error) {
