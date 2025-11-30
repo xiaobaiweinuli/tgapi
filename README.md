@@ -111,9 +111,9 @@ binding = "FILE_DB" # 脚本中使用的变量名
 database_name = "telegram-map-db"
 database_id = "YOUR_DATABASE_ID"
 
- * 创建数据表： 运行以下 SQL 命令来创建脚本所需的数据表 file_map。
-   CREATE TABLE file_map (
-  key_id TEXT PRIMARY KEY,           -- 存储友好链接 Key，如 @channelname/123
+ * 创建数据表： 运行以下 SQL 命令来创建脚本所需的数据表 表名：file_mappings。
+   CREATE TABLE file_mappings (
+  file_key TEXT PRIMARY KEY,           -- 存储友好链接 Key，如 @channelname/123
   encrypted_data TEXT NOT NULL,      -- 存储加密后的文件信息
   created_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
