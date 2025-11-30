@@ -9,9 +9,43 @@ export default {
     const ACCESS_PASSWORD = env.ACCESS_PASSWORD || "请设置你的访问密码";
     const ENCRYPTION_KEY = env.ENCRYPTION_KEY || "请设置32位加密密钥abcd1234";
     
-    // D1 数据库绑定（用于存储消息ID映射）
-    // 假设 D1 数据库已绑定到名为 FILE_DB 的环境变量
-    const FILE_DB = env.FILE_DB; 
+    // D1 数据库（用于存储消息ID映射）
+    const FILE_DB = env.FILE_DB;
+    
+    // 初始化数据库表
+    if (FILE_DB && url.pathname === '/init-db') {
+      try {
+        await FILE_DB.prepare(`
+          CREATE TABLE IF NOT EXISTS file_mappings (
+            file_key TEXT PRIMARY KEY,
+            encrypted_data TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+          )
+        `).run();
+        
+        await FILE_DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_created_at ON file_mappings(created_at)
+        `).run();
+        
+        return new Response(JSON.stringify({
+          success: true,
+          message: '数据库表初始化成功',
+          table: 'file_mappings',
+          columns: ['file_key', 'encrypted_data', 'created_at']
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          error: '数据库初始化失败',
+          detail: error.message
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
+    }
     
     // 处理 CORS 跨域请求
     if (request.method === 'OPTIONS') {
@@ -30,20 +64,25 @@ export default {
     if (url.pathname === '/' || url.pathname === '') {
       return new Response(JSON.stringify({
         service: 'Telegram 图床/文件代理服务',
-        version: '4.0 (D1)',
-        description: '支持基于消息ID的友好链接,可直接跳转到 Telegram 查看',
+        version: '5.0 (D1)',
+        description: '支持基于消息ID的友好链接，可直接跳转到 Telegram 查看',
         security: {
           upload_password_required: true,
           download_password_required: false,
           encryption: 'AES-256-GCM 加密',
-          token_protection: '所有 Token 都经过加密处理,不会泄露'
+          token_protection: '所有 Token 都经过加密处理，不会泄露'
+        },
+        storage: {
+          type: 'Cloudflare D1 Database',
+          status: FILE_DB ? '已启用' : '未启用（需要绑定 FILE_DB）',
+          init_url: '/init-db (首次使用需要访问此路径初始化数据库)'
         },
         usage: {
           authentication: {
-            note: '仅上传需要密码验证,下载无需密码',
+            note: '仅上传需要密码验证，下载无需密码',
             upload_header: 'X-Access-Password: 你的密码',
             upload_parameter: '?password=你的密码',
-            download: '无需密码,直接访问链接即可'
+            download: '无需密码，直接访问链接即可'
           },
           upload: {
             path: '/bot<你的TOKEN>/<方法名>',
@@ -56,23 +95,24 @@ export default {
             encrypted: '/file/<加密字符串>',
             example_public: '/file/@myblog/279',
             example_private: '/file/1826585339/279',
-            note: '支持公开频道和私有频道,永久有效'
+            note: '支持公开频道和私有频道，永久有效'
           }
         },
         features: [
-          '上传需要密码验证,下载无需密码',
+          '上传需要密码验证，下载无需密码',
           '基于消息ID的友好链接',
           '可直接跳转到 Telegram 查看原消息',
           '加密文件下载链接（永久有效）',
-          'Token 完全加密,不会泄露',
+          'Token 完全加密，不会泄露',
           '支持文件上传（最大 100MB）',
-          '适合做公开图床和文件分享'
+          '适合做公开图床和文件分享',
+          '使用 D1 数据库存储（免费 5GB）'
         ],
         limits: {
           cloudflare_limit: '100MB（免费版）',
           telegram_limit: '50MB（Telegram Bot API）',
           link_expires: '永久有效',
-          d1_storage: FILE_DB ? '已启用 D1' : '未启用 D1（需要配置 D1）' // 更改为 D1 状态
+          d1_storage: FILE_DB ? '已启用 (5GB 免费额度)' : '未启用（需要配置 D1）'
         }
       }, null, 2), {
         status: 200,
@@ -129,17 +169,15 @@ export default {
         });
       }
       
-      // 尝试从 D1 获取 (替换了 KV 逻辑)
-      if (FILE_DB && fileKey && pathParts.length !== 1) { // 只有友好链接才查 D1
+      // 尝试从 D1 获取
+      if (FILE_DB) {
         try {
-          // 在 D1 数据库中查找 key_id
-          const { results } = await FILE_DB.prepare(
-            "SELECT encrypted_data FROM file_map WHERE key_id = ?"
-          ).bind(fileKey).all();
+          const result = await FILE_DB.prepare(
+            'SELECT encrypted_data FROM file_mappings WHERE file_key = ?'
+          ).bind(fileKey).first();
           
-          if (results && results.length > 0) {
-            const encryptedData = results[0].encrypted_data;
-            const decrypted = await decryptData(encryptedData, ENCRYPTION_KEY);
+          if (result && result.encrypted_data) {
+            const decrypted = await decryptData(result.encrypted_data, ENCRYPTION_KEY);
             fileData = JSON.parse(decrypted);
           }
         } catch (error) {
@@ -147,7 +185,7 @@ export default {
         }
       }
       
-      // 如果 D1 查找失败 或者 路径是加密链接,尝试直接解密
+      // 如果 D1 查找失败，尝试直接解密（可能是加密链接）
       if (!fileData && pathParts.length === 1) {
         try {
           const decrypted = await decryptData(fileKey, ENCRYPTION_KEY);
@@ -155,7 +193,7 @@ export default {
         } catch (error) {
           return new Response(JSON.stringify({
             error: '文件不存在',
-            message: '找不到该文件,可能已被删除或链接无效',
+            message: '找不到该文件，可能已被删除或链接无效',
             path: url.pathname
           }), {
             status: 404,
@@ -391,15 +429,16 @@ export default {
               
               const encryptedUrl = `${url.origin}/file/${encrypted}`;
               
-              // 如果有 D1 存储,保存映射 (替换了 KV 逻辑)
+              // 如果有 D1 数据库，保存映射
               if (FILE_DB && channelIdentifier) {
                 try {
                   const fileKey = `${channelIdentifier}/${messageId}`;
-                  // 使用 D1 的 INSERT OR REPLACE 写入数据
+                  const timestamp = Math.floor(Date.now() / 1000);
+                  
                   await FILE_DB.prepare(
-                    `INSERT OR REPLACE INTO file_map (key_id, encrypted_data) 
-                     VALUES (?, ?)`
-                  ).bind(fileKey, encrypted).run();
+                    'INSERT OR REPLACE INTO file_mappings (file_key, encrypted_data, created_at) VALUES (?, ?, ?)'
+                  ).bind(fileKey, encrypted, timestamp).run();
+                  
                 } catch (error) {
                   console.error('保存到 D1 失败:', error);
                 }
@@ -418,9 +457,9 @@ export default {
                 telegram_link: telegramMessageLink,
                 markdown: `![${filename}](${friendlyUrl || encryptedUrl})`,
                 html: `<img src="${friendlyUrl || encryptedUrl}" alt="${filename}" />`,
-                note: FILE_DB && friendlyUrl // 更改提示信息中的变量
-                  ? '链接永久有效,无需密码即可下载,可直接跳转到 Telegram 查看原消息'
-                  : '加密链接永久有效（需要配置 D1 存储才能使用友好链接）'
+                note: FILE_DB && friendlyUrl
+                  ? '链接永久有效，无需密码即可下载，可直接跳转到 Telegram 查看原消息'
+                  : '加密链接永久有效（需要配置 D1 数据库才能使用友好链接）'
               };
               
               // 添加原始 Telegram 信息
@@ -493,9 +532,9 @@ async function encryptData(data, key) {
   combined.set(new Uint8Array(encrypted), iv.length);
   
   return btoa(String.fromCharCode(...combined))
-    .替换(/\+/g, '-')
-    .替换(/\//g, '_')
-    .替换(/=/g, '');
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
 }
 
 // ===== 解密函数 =====
@@ -504,8 +543,8 @@ async function decryptData(encryptedData, key) {
   
   const padding = '='.repeat((4 - encryptedData.length % 4) % 4);
   const base64 = encryptedData
-    .替换(/-/g, '+')
-    .替换(/_/g, '/') + padding;
+    .replace(/-/g, '+')
+    .replace(/_/g, '/') + padding;
   
   const combined = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
   
