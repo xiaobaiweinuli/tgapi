@@ -96,6 +96,35 @@ wrangler deploy
 ```
 https://tgapi.your-subdomain.workers.dev
 ```
+## 改造成D1
+```
+将 Cloudflare Workers 脚本中的键值存储（KV）逻辑完全迁移到 D1 关系型数据库的逻辑。
+下面是修改后的完整 Worker 脚本，以及您需要进行的 D1 数据库设置步骤。
+🛠️ D1 迁移指南与修改后的 Worker 脚本
+步骤一：D1 数据库设置
+在部署此 Worker 之前，请确保您已完成以下操作：
+ * 创建 D1 数据库： 在 Cloudflare 控制台或使用 wrangler CLI 创建一个新的 D1 数据库（例如命名为 telegram-map-db）。
+ * 绑定数据库： 在您的 Worker 设置（或 wrangler.toml 文件）中，将这个 D1 数据库绑定到一个名为 FILE_DB 的环境变量上。
+   wrangler.toml 示例:
+   [[d1_databases]]
+binding = "FILE_DB" # 脚本中使用的变量名
+database_name = "telegram-map-db"
+database_id = "YOUR_DATABASE_ID"
+
+ * 创建数据表： 运行以下 SQL 命令来创建脚本所需的数据表 file_map。
+   CREATE TABLE file_map (
+  key_id TEXT PRIMARY KEY,           -- 存储友好链接 Key，如 @channelname/123
+  encrypted_data TEXT NOT NULL,      -- 存储加密后的文件信息
+  created_at INTEGER DEFAULT (strftime('%s', 'now'))
+);
+
+步骤二：修改后的 Workers 脚本
+请用以下代码替换您原有的 Worker 脚本内容。
+主要的修改点：
+ * 将配置变量 FILE_STORE 更改为 FILE_DB。
+ * 在下载逻辑中，使用 FILE_DB.prepare().bind().all() 进行查询。
+ * 在上传成功后，使用 FILE_DB.prepare().bind().run() 和 INSERT OR REPLACE 语句进行数据写入。
+```
 
 ## 📖 使用指南
 
