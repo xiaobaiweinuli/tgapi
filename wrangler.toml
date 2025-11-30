@@ -2,6 +2,7 @@ name = "tgbotapi"
 main = "src/index.js"
 compatibility_date = "2025-11-26"
 
-[[kv_namespaces]]
-binding = "FILE_STORE"
-id = "be8c76a2cc4943cd853087d2dbf343ea"
+[[d1_databases]]
+binding = "FILE_DB"
+database_name = "tgapi"
+database_id = "561ceeb4-ecf4-4011-b028-ae45075873c2"
