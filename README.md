@@ -9,11 +9,14 @@
 - 🔗 **友好的链接格式** - 基于频道和消息ID，简洁易读
   - 公开频道：`/file/@channelname/123`
   - 私有频道：`/file/1826585339/123`
+- 🚀 **自动获取文件** - 知道消息 ID 就能直接访问，无需预先生成链接（Bot 是管理员时）
 - 🔒 **Token 加密保护** - 下载链接中不包含明文 Bot Token
 - ♾️ **永久有效** - 链接永不过期
 - 📱 **Telegram 原消息跳转** - 可以直接跳转到 Telegram 查看原文件
+- 🔄 **支持转发文件** - 为已转发到频道的文件生成下载链接
 - 🚀 **CDN 加速** - 利用 Cloudflare 全球边缘节点
 - 📦 **大文件支持** - 最大支持 100MB（Cloudflare 免费版）
+- 💾 **D1 数据库存储** - 免费 5GB 存储空间
 
 ## 🎯 使用场景
 
@@ -21,6 +24,7 @@
 - ✅ 文档分享
 - ✅ 视频托管
 - ✅ 音频文件
+- ✅ 为历史消息生成直链
 - ✅ 任何需要永久直链的文件
 
 ## 📋 前置要求
@@ -50,15 +54,19 @@ npm install -g wrangler
 wrangler login
 ```
 
-### 4. 创建 KV 命名空间
+### 4. 创建 D1 数据库
 
 ```bash
-wrangler kv:namespace create "FILE_STORE"
+# 创建数据库
+wrangler d1 create telegram-files
+
+# 记录输出的 database_id
 ```
 
-记录输出的 KV ID，例如：
+输出示例：
 ```
-{ binding = "FILE_STORE", id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }
+✅ Successfully created DB 'telegram-files'
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
 ### 5. 配置 `wrangler.toml`
@@ -66,27 +74,73 @@ wrangler kv:namespace create "FILE_STORE"
 ```toml
 name = "tgapi"
 main = "src/index.js"
-compatibility_date = "2024-11-25"
+compatibility_date = "2024-12-01"
 
-# KV 命名空间绑定
-[[kv_namespaces]]
-binding = "FILE_STORE"
-id = "你的KV命名空间ID"  # 替换为步骤4中获取的ID
+# D1 数据库绑定
+[[d1_databases]]
+binding = "FILE_DB"
+database_name = "telegram-files"
+database_id = "你的数据库ID"  # 替换为步骤4中获取的ID
 ```
 
-### 6. 设置密钥
+### 6. 初始化数据库表
+
+创建 `schema.sql` 文件：
+
+```sql
+-- schema.sql
+CREATE TABLE IF NOT EXISTS file_mappings (
+  file_key TEXT PRIMARY KEY,
+  encrypted_data TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_created_at ON file_mappings(created_at);
+```
+
+执行 SQL：
+
+```bash
+wrangler d1 execute telegram-files --file=./schema.sql
+```
+
+或者部署后访问：`https://your-worker.workers.dev/init-db`
+
+### 7. 设置环境变量
+
+**方式 1：使用 Cloudflare Dashboard（推荐）**
+
+1. 进入 Cloudflare Dashboard → Workers & Pages
+2. 选择你的项目 → Settings → Variables
+3. 在 **Production** 和 **Preview** 环境分别添加：
+   - `ACCESS_PASSWORD`（类型：Secret 加密）- 上传密码
+   - `ENCRYPTION_KEY`（类型：Secret 加密，必须32位）- 加密密钥
+   - `BOT_TOKEN`（类型：Secret 加密）- Bot Token（用于自动获取文件，格式：`123456:ABC-DEF`，不含 `bot` 前缀）
+
+**方式 2：使用 Wrangler CLI**
 
 ```bash
 # 设置上传密码
-wrangler secret put ACCESS_PASSWORD
-# 输入你的密码，例如：mySecurePassword123
+echo "你的密码" | wrangler secret put ACCESS_PASSWORD
 
-# 设置加密密钥（32位随机字符串）
-wrangler secret put ENCRYPTION_KEY
-# 输入32位密钥，例如：abcdef1234567890abcdef1234567890
+# 设置加密密钥（32位）
+echo "你的32位密钥" | wrangler secret put ENCRYPTION_KEY
+
+# 设置 Bot Token（用于自动获取文件）
+echo "123456:ABC-DEF" | wrangler secret put BOT_TOKEN
 ```
 
-### 7. 部署
+**生成安全密钥：**
+
+```bash
+# 生成访问密码
+openssl rand -base64 24
+
+# 生成32位加密密钥
+openssl rand -hex 16
+```
+
+### 8. 部署
 
 ```bash
 wrangler deploy
@@ -96,35 +150,43 @@ wrangler deploy
 ```
 https://tgapi.your-subdomain.workers.dev
 ```
-## 改造成D1
-```
-将 Cloudflare Workers 脚本中的键值存储（KV）逻辑完全迁移到 D1 关系型数据库的逻辑。
-下面是修改后的完整 Worker 脚本，以及您需要进行的 D1 数据库设置步骤。
-🛠️ D1 迁移指南与修改后的 Worker 脚本
-步骤一：D1 数据库设置
-在部署此 Worker 之前，请确保您已完成以下操作：
- * 创建 D1 数据库： 在 Cloudflare 控制台或使用 wrangler CLI 创建一个新的 D1 数据库（例如命名为 telegram-map-db）。
- * 绑定数据库： 在您的 Worker 设置（或 wrangler.toml 文件）中，将这个 D1 数据库绑定到一个名为 FILE_DB 的环境变量上。
-   wrangler.toml 示例:
-   [[d1_databases]]
-binding = "FILE_DB" # 脚本中使用的变量名
-database_name = "telegram-map-db"
-database_id = "YOUR_DATABASE_ID"
 
- * 创建数据表： 运行以下 SQL 命令来创建脚本所需的数据表 表名：file_mappings。
-   CREATE TABLE file_mappings (
-  file_key TEXT PRIMARY KEY,           -- 存储友好链接 Key，如 @channelname/123
-  encrypted_data TEXT NOT NULL,      -- 存储加密后的文件信息
-  created_at INTEGER DEFAULT (strftime('%s', 'now'))
-);
+### 9. 使用 GitHub Actions 自动部署（可选）
 
-步骤二：修改后的 Workers 脚本
-请用以下代码替换您原有的 Worker 脚本内容。
-主要的修改点：
- * 将配置变量 FILE_STORE 更改为 FILE_DB。
- * 在下载逻辑中，使用 FILE_DB.prepare().bind().all() 进行查询。
- * 在上传成功后，使用 FILE_DB.prepare().bind().run() 和 INSERT OR REPLACE 语句进行数据写入。
+创建 `.github/workflows/deploy.yml`：
+
+```yaml
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main, d1]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          npm install -g wrangler
+          wrangler deploy --keep-vars
+          echo "${{ secrets.ACCESS_PASSWORD }}" | wrangler secret put ACCESS_PASSWORD
+          echo "${{ secrets.ENCRYPTION_KEY }}" | wrangler secret put ENCRYPTION_KEY
 ```
+
+在 GitHub 仓库设置 Secrets：
+- `CLOUDFLARE_API_TOKEN`
+- `ACCESS_PASSWORD`
+- `ENCRYPTION_KEY`
 
 ## 📖 使用指南
 
@@ -156,8 +218,10 @@ curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/send
   -F 'chat_id=<你的频道ID>' \
   -F 'video=@/path/to/video.mp4'
 ```
-## 超级群组指定话题
-```
+
+#### 超级群组指定话题
+
+```bash
 # 发送文档到指定话题
 curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/sendDocument' \
   -H 'X-Access-Password: 你的密码' \
@@ -168,6 +232,7 @@ curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/send
 # 发送消息到指定话题
 curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/sendMessage' \
   -H 'Content-Type: application/json' \
+  -H 'X-Access-Password: 你的密码' \
   -d '{
     "chat_id": <你的群组ID>,
     "message_thread_id": 话题ID,
@@ -179,8 +244,69 @@ curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/send
   -H 'X-Access-Password: 你的密码' \
   -F 'chat_id=<你的群组ID>' \
   -F 'message_thread_id=话题ID' \
-   -F 'photo=@/path/to/image.jpg'
+  -F 'photo=@/path/to/image.jpg'
 ```
+
+### 为转发的文件生成链接（需要密码）
+
+如果你已经在 Telegram 频道转发了文件，可以使用此 API 生成下载链接：
+
+```bash
+curl -X POST 'https://tgapi.your-subdomain.workers.dev/add-forwarded-file' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Access-Password: 你的密码' \
+  -d '{
+    "token": "你的BOT_TOKEN",
+    "chat_id": "@频道用户名 或 -1001234567890",
+    "message_id": 279
+  }'
+```
+
+**获取消息 ID 的方法：**
+1. 在 Telegram 桌面版右键点击消息
+2. 选择"复制消息链接"
+3. 链接格式：`https://t.me/c/1234567890/279`
+4. 最后的数字 `279` 就是消息 ID
+
+**获取频道 ID 的方法：**
+- 公开频道：直接使用 `@username` 格式
+- 私有频道：将 Bot 添加为管理员，访问 `https://api.telegram.org/bot<TOKEN>/getUpdates` 查看
+
+**批量处理脚本（Python）：**
+
+```python
+#!/usr/bin/env python3
+import requests
+
+WORKER_URL = "https://your-worker.workers.dev"
+PASSWORD = "your-password"
+BOT_TOKEN = "123456:ABC-DEF"
+CHAT_ID = "@mychannel"  # 或 -1001234567890
+
+def add_forwarded_file(message_id):
+    response = requests.post(
+        f"{WORKER_URL}/add-forwarded-file",
+        headers={
+            "Content-Type": "application/json",
+            "X-Access-Password": PASSWORD
+        },
+        json={
+            "token": BOT_TOKEN,
+            "chat_id": CHAT_ID,
+            "message_id": message_id
+        }
+    )
+    result = response.json()
+    if result.get("success"):
+        print(f"✅ 消息 {message_id}: {result['cdn']['url']}")
+    else:
+        print(f"❌ 消息 {message_id}: {result.get('error')}")
+
+# 批量处理多个消息
+for msg_id in [279, 280, 281, 282]:
+    add_forwarded_file(msg_id)
+```
+
 ### 响应示例
 
 ```json
@@ -214,19 +340,44 @@ curl -X POST 'https://tgapi.your-subdomain.workers.dev/bot<你的BOT_TOKEN>/send
 
 ### 下载文件（无需密码）
 
-#### 公开频道
+#### 方式 1：直接访问（推荐，无需预先生成）⭐
 
+只要满足以下条件，直接访问链接即可自动下载：
+- ✅ Bot 是频道/群组的管理员
+- ✅ 已设置 `BOT_TOKEN` 环境变量
+- ✅ 知道消息 ID
+
+**公开频道：**
 ```
 https://tgapi.your-subdomain.workers.dev/file/@myblog/279
 ```
 
-#### 私有频道
-
+**私有频道：**
 ```
 https://tgapi.your-subdomain.workers.dev/file/1826585339/279
 ```
 
-#### 加密链接（备用）
+**工作原理：**
+1. 首次访问时，Worker 自动从 Telegram 获取文件信息
+2. 加密存储到 D1 数据库
+3. 之后访问直接从 D1 读取，速度更快
+
+#### 方式 2：预先生成链接
+
+如果想提前生成链接（批量处理），使用 `/add-forwarded-file` API：
+
+```bash
+curl -X POST 'https://tgapi.your-subdomain.workers.dev/add-forwarded-file' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Access-Password: 你的密码' \
+  -d '{
+    "token": "123456:ABC-DEF",
+    "chat_id": "@myblog",
+    "message_id": 279
+  }'
+```
+
+#### 方式 3：加密链接（隐藏消息ID）
 
 ```
 https://tgapi.your-subdomain.workers.dev/file/xYz9Kp2mN4qR8sT6...
@@ -358,16 +509,41 @@ routes = [
 ]
 ```
 
-### 环境变量
+### 本地开发
 
-可以在 `wrangler.toml` 中设置公开的环境变量：
+创建 `.dev.vars` 文件（不要提交到 Git）：
 
-```toml
-[vars]
-# 这里可以放一些非敏感配置
+```text
+ACCESS_PASSWORD=your-password
+ENCRYPTION_KEY=your-32-character-key
 ```
 
-**注意**：密码和加密密钥必须使用 `wrangler secret put` 设置，不要写在配置文件中。
+运行本地开发服务器：
+
+```bash
+wrangler dev
+```
+
+### 环境变量管理
+
+**重要提示：** 使用 GitHub Actions 部署时，为了避免环境变量被覆盖：
+
+1. **在 Cloudflare Dashboard 设置变量**（Settings → Variables）
+2. **在 GitHub Secrets 中添加相同的变量**
+3. **在部署脚本中使用 `--keep-vars` 参数**
+
+```yaml
+# .github/workflows/deploy.yml
+- run: wrangler deploy --keep-vars
+```
+
+或者使用 Secrets 注入：
+
+```yaml
+- run: |
+    echo "${{ secrets.ACCESS_PASSWORD }}" | wrangler secret put ACCESS_PASSWORD
+    echo "${{ secrets.ENCRYPTION_KEY }}" | wrangler secret put ENCRYPTION_KEY
+```
 
 ## 📊 限制说明
 
@@ -377,11 +553,13 @@ routes = [
 - CPU 时间：10ms/请求
 - 请求体大小：100MB
 
-### Cloudflare KV 免费版
+### Cloudflare D1 免费版
 
-- 读取：100,000 次/天
-- 写入：1,000 次/天
-- 存储：1GB
+- 存储：5GB
+- 每日读取：500 万行
+- 每日写入：10 万行
+
+相比 KV 存储（1GB + 有限写入），D1 提供了更大的免费额度！
 
 ### Telegram Bot API
 
@@ -392,7 +570,7 @@ routes = [
 
 ### 上传安全
 
-- ✅ 密码存储在 Cloudflare Workers 环境变量中
+- ✅ 密码使用 Cloudflare Secret 加密存储
 - ✅ 密码通过 HTTPS 传输
 - ✅ 只有知道密码的人才能上传
 
@@ -405,47 +583,94 @@ routes = [
 ### 建议
 
 1. 使用强密码（至少 16 位，包含大小写字母、数字、符号）
-2. 定期更换密码
-3. 不要将上传密码泄露给他人
-4. 使用自定义域名（更专业）
+2. 加密密钥必须是 32 位字符
+3. 定期更换密码
+4. 不要将上传密码泄露给他人
+5. 使用自定义域名（更专业）
+6. 使用 Secret 类型存储敏感变量（而非 Text）
 
 ## ❓ 常见问题
 
 ### Q: 如何获取频道 ID？
 
 A: 
-1. 方法 1：转发频道消息到 [@userinfobot](https://t.me/userinfobot)
-2. 方法 2：使用 Bot API 的 `getUpdates` 方法
-3. 公开频道可以直接使用 `@频道用户名`
+1. **公开频道**：直接使用 `@频道用户名` 格式
+2. **私有频道方法 1**：转发频道消息到 [@userinfobot](https://t.me/userinfobot)
+3. **私有频道方法 2**：
+   - 将 Bot 添加为频道管理员
+   - 访问 `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
+   - 在返回的 JSON 中查找 `"chat":{"id":-1001234567890}`
 
 ### Q: 私有频道的 ID 格式是什么？
 
 A: 
-- 完整 ID：`-1001826585339`（用于 API 调用）
-- 链接中的 ID：`1826585339`（去掉 `-100` 前缀）
+- **完整 ID**：`-1001826585339`（用于 API 调用）
+- **链接中的 ID**：`1826585339`（去掉 `-100` 前缀）
+
+### Q: 为什么环境变量设置后还是密码错误？
+
+A: 
+1. **检查设置位置**：必须在 **Settings → Variables** 而不是 Build settings
+2. **检查环境**：确保 Production 和 Preview 都设置了
+3. **检查分支**：d1 分支需要在 Preview 环境设置
+4. **重新部署**：设置后点击 "Save and Deploy"
+5. **使用 Secret 类型**：加密存储更安全
 
 ### Q: 上传失败怎么办？
 
 A: 检查以下几点：
 1. Bot Token 是否正确
 2. Bot 是否已加入频道并有发送消息权限
-3. 密码是否正确
+3. 访问密码是否正确（区分大小写）
 4. 文件大小是否超过 50MB
+5. 查看 Worker 日志：`wrangler tail`
 
 ### Q: 下载链接为什么是 404？
 
 A: 
-1. 检查 KV 是否正确配置
-2. 确认文件已成功上传
-3. 等待几秒钟（KV 同步需要时间）
+1. 检查 D1 数据库是否正确绑定
+2. 确认数据库表已创建（访问 `/init-db`）
+3. 确认文件已成功上传
+4. 等待几秒钟（数据库同步需要时间）
+5. 检查链接格式是否正确
 
 ### Q: 如何删除已上传的文件？
 
 A: 
 1. 在 Telegram 频道中删除该消息
 2. 下载链接会失效（因为 Telegram 文件被删除）
-3. 如需清理 KV 存储，可以在 Cloudflare Dashboard 中手动删除
+3. 如需清理 D1 数据：
+   ```bash
+   wrangler d1 execute telegram-files --command="DELETE FROM file_mappings WHERE file_key='@channel/123'"
+   ```
+
+### Q: D1 和 KV 有什么区别？
+
+A:
+- **D1**：关系型数据库，5GB 免费，支持 SQL 查询
+- **KV**：键值存储，1GB 免费，写入次数有限
+
+**推荐使用 D1**，免费额度更大，更适合长期使用。
+
+### Q: 转发的文件可以下载吗？
+
+A:
+可以！使用 `/add-forwarded-file` API 为转发的文件生成下载链接。Bot 必须是频道管理员才能访问消息。
 
 ---
 
 **⭐ 如果这个项目对你有帮助，请给一个 Star！**
+
+## 📝 更新日志
+
+### v2.0 (2024-12)
+- ✨ 新增 D1 数据库支持（取代 KV）
+- ✨ 新增转发文件链接生成功能
+- 🔒 改进环境变量安全性（支持 Secret 加密）
+- 📚 完善部署文档和故障排查指南
+
+### v1.0 (2024-11)
+- 🎉 首次发布
+- ✨ 支持文件上传和下载
+- ✨ 基于消息 ID 的友好链接
+- 🔒 Token 加密保护
