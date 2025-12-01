@@ -6,8 +6,16 @@ export default {
     const url = new URL(request.url);
     
     // ===== 配置区域 =====
-    const ACCESS_PASSWORD = env.ACCESS_PASSWORD || "请设置你的访问密码";
-    const ENCRYPTION_KEY = env.ENCRYPTION_KEY || "请设置32位加密密钥abcd1234";
+    const ACCESS_PASSWORD = env.ACCESS_PASSWORD || "";
+    const ENCRYPTION_KEY = env.ENCRYPTION_KEY || "";
+    
+    // 调试：检查环境变量是否正确加载（部署后可以删除）
+    console.log('环境变量检查:', {
+      hasPassword: !!ACCESS_PASSWORD,
+      hasKey: !!ENCRYPTION_KEY,
+      passwordLength: ACCESS_PASSWORD?.length || 0,
+      keyLength: ENCRYPTION_KEY?.length || 0
+    });
     
     // D1 数据库（用于存储消息ID映射）
     const FILE_DB = env.FILE_DB;
@@ -89,6 +97,21 @@ export default {
             example: 'POST /bot123456:ABC-DEF/sendDocument',
             methods: ['sendDocument', 'sendPhoto', 'sendVideo', 'sendAudio']
           },
+          add_forwarded_file: {
+            path: '/add-forwarded-file',
+            method: 'POST',
+            description: '为转发的消息生成下载链接（需要密码）',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Access-Password': '你的密码'
+            },
+            body: {
+              token: 'Bot Token',
+              chat_id: '@channelname 或 -1001234567890',
+              message_id: 123
+            },
+            example: 'curl -X POST https://your-worker.workers.dev/add-forwarded-file -H "Content-Type: application/json" -H "X-Access-Password: your-password" -d \'{"token":"123456:ABC","chat_id":"@mychannel","message_id":279}\''
+          },
           download: {
             public_channel: '/file/@频道用户名/消息ID',
             private_channel: '/file/频道ID/消息ID',
@@ -105,6 +128,7 @@ export default {
           '加密文件下载链接（永久有效）',
           'Token 完全加密，不会泄露',
           '支持文件上传（最大 100MB）',
+          '支持为转发的文件生成下载链接',
           '适合做公开图床和文件分享',
           '使用 D1 数据库存储（免费 5GB）'
         ],
@@ -145,13 +169,22 @@ export default {
       
       let fileData = null;
       let fileKey = null;
+      let chatId = null;
+      let messageId = null;
       
       // 判断路径格式
       if (pathParts.length === 2) {
         // 格式：@username/123 或 1826585339/123
         const chatIdentifier = pathParts[0];
-        const messageId = pathParts[1];
+        messageId = parseInt(pathParts[1]);
         fileKey = `${chatIdentifier}/${messageId}`;
+        
+        // 解析 chat_id
+        if (chatIdentifier.startsWith('@')) {
+          chatId = chatIdentifier;
+        } else {
+          chatId = `-100${chatIdentifier}`;
+        }
       } else if (pathParts.length === 1) {
         // 格式：加密字符串
         fileKey = pathParts[0];
@@ -185,6 +218,109 @@ export default {
         }
       }
       
+      // 如果 D1 中找不到，且有 chat_id 和 message_id，尝试自动获取
+      if (!fileData && chatId && messageId && env.BOT_TOKEN) {
+        console.log(`D1 中未找到记录，尝试自动获取: ${chatId}/${messageId}`);
+        
+        try {
+          // 使用 forwardMessage 获取文件信息
+          const forwardUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/forwardMessage`;
+          const forwardResponse = await fetch(forwardUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              from_chat_id: chatId,
+              message_id: messageId
+            })
+          });
+          
+          const forwardData = await forwardResponse.json();
+          
+          if (forwardData.ok && forwardData.result) {
+            const msg = forwardData.result;
+            let fileId = null;
+            let filename = null;
+            
+            // 提取文件信息
+            if (msg.document) {
+              fileId = msg.document.file_id;
+              filename = msg.document.file_name || 'document';
+            } else if (msg.photo) {
+              fileId = msg.photo[msg.photo.length - 1].file_id;
+              filename = 'photo.jpg';
+            } else if (msg.video) {
+              fileId = msg.video.file_id;
+              filename = msg.video.file_name || 'video.mp4';
+            } else if (msg.audio) {
+              fileId = msg.audio.file_id;
+              filename = msg.audio.file_name || 'audio.mp3';
+            } else if (msg.animation) {
+              fileId = msg.animation.file_id;
+              filename = msg.animation.file_name || 'animation.gif';
+            } else if (msg.voice) {
+              fileId = msg.voice.file_id;
+              filename = 'voice.ogg';
+            } else if (msg.video_note) {
+              fileId = msg.video_note.file_id;
+              filename = 'video_note.mp4';
+            } else if (msg.sticker) {
+              fileId = msg.sticker.file_id;
+              filename = 'sticker.webp';
+            }
+            
+            // 删除转发的消息
+            try {
+              await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/deleteMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: chatId,
+                  message_id: msg.message_id
+                })
+              });
+            } catch (e) {
+              console.log('删除转发消息失败:', e);
+            }
+            
+            if (fileId) {
+              // 获取文件路径
+              const getFileUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/getFile?file_id=${fileId}`;
+              const fileResponse = await fetch(getFileUrl);
+              const fileResult = await fileResponse.json();
+              
+              if (fileResult.ok && fileResult.result.file_path) {
+                fileData = {
+                  token: env.BOT_TOKEN,
+                  path: fileResult.result.file_path,
+                  filename: filename,
+                  message_id: messageId,
+                  chat_id: chatId
+                };
+                
+                // 保存到 D1 以便下次直接使用
+                if (FILE_DB) {
+                  try {
+                    const encrypted = await encryptData(JSON.stringify(fileData), ENCRYPTION_KEY);
+                    const timestamp = Math.floor(Date.now() / 1000);
+                    
+                    await FILE_DB.prepare(
+                      'INSERT OR REPLACE INTO file_mappings (file_key, encrypted_data, created_at) VALUES (?, ?, ?)'
+                    ).bind(fileKey, encrypted, timestamp).run();
+                    
+                    console.log(`已保存到 D1: ${fileKey}`);
+                  } catch (e) {
+                    console.error('保存到 D1 失败:', e);
+                  }
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('自动获取文件信息失败:', error);
+        }
+      }
+      
       // 如果 D1 查找失败，尝试直接解密（可能是加密链接）
       if (!fileData && pathParts.length === 1) {
         try {
@@ -194,7 +330,8 @@ export default {
           return new Response(JSON.stringify({
             error: '文件不存在',
             message: '找不到该文件，可能已被删除或链接无效',
-            path: url.pathname
+            path: url.pathname,
+            hint: chatId && messageId ? '请确保 Bot 是该频道/群组的管理员，并且在环境变量中设置了 BOT_TOKEN' : null
           }), {
             status: 404,
             headers: { 'Content-Type': 'application/json; charset=utf-8' }
@@ -206,7 +343,8 @@ export default {
         return new Response(JSON.stringify({
           error: '文件不存在',
           message: '找不到该文件',
-          path: url.pathname
+          path: url.pathname,
+          hint: chatId && messageId ? '请确保：1) Bot 是管理员 2) 消息ID正确 3) 已设置 BOT_TOKEN 环境变量' : null
         }), {
           status: 404,
           headers: { 'Content-Type': 'application/json; charset=utf-8' }
@@ -248,6 +386,316 @@ export default {
       } catch (error) {
         return new Response(JSON.stringify({
           error: '下载请求失败',
+          detail: error.message
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
+    }
+    
+    // ===== 处理转发文件的链接生成（需要密码）=====
+    if (url.pathname === '/add-forwarded-file' && request.method === 'POST') {
+      const providedPassword = request.headers.get('X-Access-Password') || 
+                              url.searchParams.get('password');
+      
+      if (providedPassword !== ACCESS_PASSWORD) {
+        return new Response(JSON.stringify({
+          error: '身份验证失败',
+          message: '需要提供访问密码'
+        }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
+      
+      try {
+        const body = await request.json();
+        const { token, chat_id, message_id, message_thread_id } = body;
+        
+        // 去掉 token 中的 "bot" 前缀（如果有）
+        const cleanToken = token.replace(/^bot/i, '');
+        
+        if (!cleanToken || !chat_id || !message_id) {
+          return new Response(JSON.stringify({
+            error: '参数缺失',
+            required: ['token', 'chat_id', 'message_id'],
+            optional: ['message_thread_id'],
+            example: {
+              token: '123456:ABC-DEF 或 bot123456:ABC-DEF',
+              chat_id: '@channelname 或 -1001234567890',
+              message_id: 123,
+              message_thread_id: 2214
+            }
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json; charset=utf-8' }
+          });
+        }
+        
+        let fileId = null;
+        let filename = null;
+        let fileSize = null;
+        
+        // 方法1: 尝试使用 forwardMessage 到同一个群组（会返回消息详情）
+        const forwardUrl = `https://api.telegram.org/bot${cleanToken}/forwardMessage`;
+        const forwardPayload = {
+          chat_id: chat_id,
+          from_chat_id: chat_id,
+          message_id: message_id
+        };
+        
+        // 如果有话题ID，添加到转发请求中
+        if (message_thread_id) {
+          forwardPayload.message_thread_id = message_thread_id;
+        }
+        
+        const forwardResponse = await fetch(forwardUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(forwardPayload)
+        });
+        
+        const forwardData = await forwardResponse.json();
+        
+        if (forwardData.ok && forwardData.result) {
+          const forwardedMsg = forwardData.result;
+          
+          // 提取文件信息
+          if (forwardedMsg.document) {
+            fileId = forwardedMsg.document.file_id;
+            filename = forwardedMsg.document.file_name || 'document';
+            fileSize = forwardedMsg.document.file_size;
+          } else if (forwardedMsg.photo) {
+            const largestPhoto = forwardedMsg.photo[forwardedMsg.photo.length - 1];
+            fileId = largestPhoto.file_id;
+            filename = 'photo.jpg';
+            fileSize = largestPhoto.file_size;
+          } else if (forwardedMsg.video) {
+            fileId = forwardedMsg.video.file_id;
+            filename = forwardedMsg.video.file_name || 'video.mp4';
+            fileSize = forwardedMsg.video.file_size;
+          } else if (forwardedMsg.audio) {
+            fileId = forwardedMsg.audio.file_id;
+            filename = forwardedMsg.audio.file_name || 'audio.mp3';
+            fileSize = forwardedMsg.audio.file_size;
+          } else if (forwardedMsg.animation) {
+            fileId = forwardedMsg.animation.file_id;
+            filename = forwardedMsg.animation.file_name || 'animation.gif';
+            fileSize = forwardedMsg.animation.file_size;
+          } else if (forwardedMsg.voice) {
+            fileId = forwardedMsg.voice.file_id;
+            filename = 'voice.ogg';
+            fileSize = forwardedMsg.voice.file_size;
+          } else if (forwardedMsg.video_note) {
+            fileId = forwardedMsg.video_note.file_id;
+            filename = 'video_note.mp4';
+            fileSize = forwardedMsg.video_note.file_size;
+          } else if (forwardedMsg.sticker) {
+            fileId = forwardedMsg.sticker.file_id;
+            filename = 'sticker.webp';
+            fileSize = forwardedMsg.sticker.file_size;
+          }
+          
+          // 删除刚才转发的消息（清理垃圾）
+          try {
+            await fetch(`https://api.telegram.org/bot${cleanToken}/deleteMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: chat_id,
+                message_id: forwardedMsg.message_id
+              })
+            });
+          } catch (e) {
+            console.log('删除转发消息失败（不影响功能）:', e);
+          }
+        }
+        
+        // 方法2: 如果转发失败，尝试通过 copyMessage（某些情况更可靠）
+        if (!fileId) {
+          const copyUrl = `https://api.telegram.org/bot${cleanToken}/copyMessage`;
+          const copyPayload = {
+            chat_id: chat_id,
+            from_chat_id: chat_id,
+            message_id: message_id
+          };
+          
+          if (message_thread_id) {
+            copyPayload.message_thread_id = message_thread_id;
+          }
+          
+          const copyResponse = await fetch(copyUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(copyPayload)
+          });
+          
+          const copyData = await copyResponse.json();
+          
+          if (!copyData.ok) {
+            return new Response(JSON.stringify({
+              error: '获取消息失败',
+              detail: copyData.description || forwardData.description || '无法访问该消息',
+              possible_reasons: [
+                'Bot 不是群组管理员',
+                '消息ID不存在',
+                'Bot 没有读取消息的权限',
+                '话题ID (message_thread_id) 不正确'
+              ],
+              debug_info: {
+                forward_error: forwardData.description,
+                copy_error: copyData.description
+              }
+            }), {
+              status: 400,
+              headers: { 'Content-Type': 'application/json; charset=utf-8' }
+            });
+          }
+          
+          // copyMessage 成功，删除复制的消息并返回错误（因为我们没拿到文件信息）
+          if (copyData.result && copyData.result.message_id) {
+            try {
+              await fetch(`https://api.telegram.org/bot${cleanToken}/deleteMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: chat_id,
+                  message_id: copyData.result.message_id
+                })
+              });
+            } catch (e) {
+              console.log('删除复制消息失败:', e);
+            }
+          }
+          
+          return new Response(JSON.stringify({
+            error: '消息中没有文件',
+            message: '该消息不包含可下载的文件，或文件类型不支持',
+            supported_types: ['document', 'photo', 'video', 'audio', 'animation', 'voice', 'video_note', 'sticker']
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json; charset=utf-8' }
+          });
+        }
+        
+        if (!fileId) {
+          return new Response(JSON.stringify({
+            error: '消息中没有文件',
+            message: '该消息不包含可下载的文件'
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json; charset=utf-8' }
+          });
+        }
+        
+        // 获取文件路径
+        const getFileUrl = `https://api.telegram.org/bot${cleanToken}/getFile?file_id=${fileId}`;
+        const fileResponse = await fetch(getFileUrl);
+        const fileDataResponse = await fileResponse.json();
+        
+        if (!fileDataResponse.ok || !fileDataResponse.result.file_path) {
+          return new Response(JSON.stringify({
+            error: '获取文件路径失败',
+            detail: fileDataResponse.description,
+            file_id: fileId
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json; charset=utf-8' }
+          });
+        }
+        
+        // 使用获取到的文件大小，如果之前没有的话
+        if (!fileSize && fileDataResponse.result.file_size) {
+          fileSize = fileDataResponse.result.file_size;
+        }
+        
+        // 准备文件信息
+        const fileInfo = {
+          token: cleanToken,
+          path: fileDataResponse.result.file_path,
+          filename: filename,
+          message_id: message_id,
+          message_thread_id: message_thread_id || null,
+          chat_id: chat_id
+        };
+        
+        // 加密
+        const encrypted = await encryptData(JSON.stringify(fileInfo), ENCRYPTION_KEY);
+        
+        // 生成链接
+        let channelIdentifier = null;
+        let telegramMessageLink = null;
+        let friendlyUrl = null;
+        
+        // 判断是公开频道还是私有频道/群组
+        if (typeof chat_id === 'string' && chat_id.startsWith('@')) {
+          // 公开频道
+          const username = chat_id.substring(1);
+          channelIdentifier = chat_id;
+          
+          // 如果有话题ID，构造话题链接
+          if (message_thread_id) {
+            telegramMessageLink = `https://t.me/${username}/${message_id}/${message_thread_id}`;
+          } else {
+            telegramMessageLink = `https://t.me/${username}/${message_id}`;
+          }
+          
+          friendlyUrl = `${url.origin}/file/${chat_id}/${message_id}`;
+        } else {
+          // 私有频道/群组（数字ID）
+          const cleanChatId = chat_id.toString().replace(/^-100/, '');
+          channelIdentifier = cleanChatId;
+          
+          // 如果有话题ID，构造话题链接
+          if (message_thread_id) {
+            telegramMessageLink = `https://t.me/c/${cleanChatId}/${message_thread_id}/${message_id}`;
+          } else {
+            telegramMessageLink = `https://t.me/c/${cleanChatId}/${message_id}`;
+          }
+          
+          friendlyUrl = `${url.origin}/file/${cleanChatId}/${message_id}`;
+        }
+        
+        const encryptedUrl = `${url.origin}/file/${encrypted}`;
+        
+        // 保存到 D1
+        if (FILE_DB && channelIdentifier) {
+          try {
+            const fileKey = `${channelIdentifier}/${message_id}`;
+            const timestamp = Math.floor(Date.now() / 1000);
+            
+            await FILE_DB.prepare(
+              'INSERT OR REPLACE INTO file_mappings (file_key, encrypted_data, created_at) VALUES (?, ?, ?)'
+            ).bind(fileKey, encrypted, timestamp).run();
+          } catch (error) {
+            console.error('保存到 D1 失败:', error);
+          }
+        }
+        
+        return new Response(JSON.stringify({
+          success: true,
+          cdn: {
+            url: friendlyUrl,
+            url_encrypted: encryptedUrl,
+            filename: filename,
+            message_id: message_id,
+            message_thread_id: message_thread_id || null,
+            chat_id: chat_id,
+            channel_identifier: channelIdentifier,
+            size: fileSize || fileDataResponse.result.file_size,
+            telegram_link: telegramMessageLink,
+            markdown: `![${filename}](${friendlyUrl})`,
+            html: `<img src="${friendlyUrl}" alt="${filename}" />`
+          }
+        }, null, 2), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+        
+      } catch (error) {
+        return new Response(JSON.stringify({
+          error: '处理失败',
           detail: error.message
         }), {
           status: 500,
@@ -450,6 +898,7 @@ export default {
                 url_encrypted: encryptedUrl,
                 filename: filename,
                 message_id: messageId,
+                message_thread_id: result.message_thread_id || null,
                 chat_id: chatId,
                 channel_identifier: channelIdentifier,
                 size: fileDataResponse.result.file_size,
