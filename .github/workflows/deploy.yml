@@ -1,0 +1,34 @@
+# .github/workflows/deploy.yml
+
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm install
+
+      # 确保您已经设置了 CLOUDFLARE_API_TOKEN Secret
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }} # 如果您的 Token 范围有限，可能需要
+
+        # === 核心步骤：通过 Secrets 注入环境变量 ===
+        env:
+          # BOT_TOKEN 是在您的 Worker 脚本中被读取的环境变量名称
+          # ${{ secrets.TG_BOT_TOKEN }} 是您在 GitHub 上创建的 Secret 名称
+          BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          ENCRYPTION_KEY: ${{ secrets.TG_ENCRYPTION_KEY }}
+          ACCESS_PASSWORD: ${{ secrets.TG_ACCESS_PASSWORD }}
+          
