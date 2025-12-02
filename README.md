@@ -2,6 +2,13 @@
 
 基于 Cloudflare Workers 的 Telegram Bot API 代理服务，支持文件上传和永久直链生成，适合做博客图床和文件分享。
 
+## 现状
+Telegram Bot API 没有直接的 getMessage 方法来获取指定消息的详细信息。所以直接构建直链会出现下面的流程
+- Worker 发现 D1 中没有这条记录
+- 调用 forwardMessage 转发消息到同一个频道（为了获取 file_id）
+- 从转发的消息中提取文件信息
+- 立即删除转发的消息
+
 ## ✨ 主要特性
 
 - 🔐 **上传密码保护** - 只有授权用户可以上传文件
