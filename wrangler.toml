@@ -1,4 +1,4 @@
-name = "tgbotapi_kv"
+name = "tgbotapi-kv"
 main = "src/index.js"
 compatibility_date = "2025-11-26"
 
