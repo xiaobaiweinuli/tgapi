@@ -6,3 +6,7 @@ compatibility_date = "2025-11-26"
 binding = "FILE_DB"
 database_name = "tgapi"
 database_id = "561ceeb4-ecf4-4011-b028-ae45075873c2"
+
+[env.production]
+[env.production.vars]
+ENVIRONMENT = "production"
