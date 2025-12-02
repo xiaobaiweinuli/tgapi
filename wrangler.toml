@@ -1,4 +1,4 @@
-name = "tgbotapi"
+name = "tg"
 main = "src/index.js"
 compatibility_date = "2025-11-26"
 
